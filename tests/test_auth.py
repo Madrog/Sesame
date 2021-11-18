@@ -1,32 +1,56 @@
-import os
+import pytest
+from flask import g, session
+from flaskr.db import get_db
 
-from flask import Flask
+ 
+def test_register(client, app):
+    assert client.get('/auth/register').status_code == 200
+    response = client.post(
+        '/auth/register', data={'username': 'a', 'password': 'a'})
+    assert 'http://localhost/auth/login' == response.headers['Location']
 
-def create_app(test_config=None):
-    # create and configure the app
-    app = Flask(__name__,instance_relative_config=True)
-    app.config.from_mapping(
-        SECRET_KEY='dev',
-        DATABASE=os.path.join(app.instance_path, 'flaskr.sqlite'),
+    with app.app_context():
+        assert get_db().execute("SELECT * FROM user WHERE username = 'a'",).fetchone() is not None
+
+
+@pytest.mark.parametrize(('username', 'password', 'message'), (
+    ('', '', b'Username is required.'),
+    ('a', '', b'Password is required.'),
+    ('test', 'test', b'already registered.'),))
+def test_register_validate_input(client, username, password, message):
+    response = client.post(
+        '/auth/register',
+        data={'username': username, 'password': password}
     )
+    assert message in response.data
 
-    if test_config is None:
-        # load the instance config, if it exists, when not testing
-        app.config.from_pyfile('config.py', silent=True)
-    else:
-        # load the test config if passed in
-        app.config.from_mapping(test_config)
+def test_login(client, auth):
+    assert client.get('/auth/login').status_code == 200
+    response = auth.login()
+    assert response.headers['Location'] == 'http://localhost/'
+
+    with client:
+        client.get('/')
+        assert session['user_id'] == 1
+        assert g.user['username'] == 'test'
 
 
-    # ensure the instance folder exists
-    try:
-        os.makedirs(app.instance_path)
-    except OSError:
-        pass
+@pytest.mark.parametrize(('username', 'password', 'message'), (
+    ('a', 'test', b'Incorrect username.'),
+    ('test', 'a', b'Incorrect password.'),
+))
+def test_login_validate_input(auth, username, password, message):
+    response = auth.log(username, password)
+    assert message in response.data
 
-    # a simple page that says hello
-    @app.route('/hello')
-    def hello():
-        return 'Hello World!'
 
-    return app
+def test_logout(client, auth):
+    auth.login()
+
+    with client:
+        auth.logout()
+        assert 'user_id' not in session
+
+
+
+
